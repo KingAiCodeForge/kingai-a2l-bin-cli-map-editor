@@ -20,11 +20,11 @@ def build_parser() -> argparse.ArgumentParser:
         prog="kingai-a2l", description="Conservative A2L/BIN scalar inspector and editor"
     )
     cmds = p.add_subparsers(dest="command", required=True)
-    for command in ("inspect", "read", "read-table", "export-json", "edit-raw", "edit-physical"):
+    for command in ("inspect", "summary", "read", "read-table", "export-json", "edit-raw", "edit-physical"):
         sp = cmds.add_parser(command)
         sp.add_argument("--a2l", required=True)
         sp.add_argument("--module", help="A2L MODULE name, required if ambiguous")
-        if command != "inspect":
+        if command not in ("inspect", "summary"):
             sp.add_argument("--bin", required=True, dest="bin_path")
             sp.add_argument("--base-address", required=True, type=_int,
                             help="Explicit ECU address represented by BIN offset zero")
@@ -62,6 +62,9 @@ def execute(args: argparse.Namespace) -> dict:
     }
     if args.command == "inspect":
         return {**header, "characteristics": definition.characteristics()}
+    if args.command == "summary":
+        from .research import summarize
+        return {**header, "structural_inventory": summarize(definition)}
     firmware = Path(args.bin_path).read_bytes()
     header.update({"bin_sha256": sha256(firmware), "bin_size": len(firmware),
                    "bin_base_address": args.base_address})

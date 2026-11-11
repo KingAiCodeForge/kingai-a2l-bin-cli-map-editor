@@ -2,7 +2,7 @@
 
 AI-native, headless ECU calibration definition tooling for software agents. Built by KingAI Pty Ltd.
 
-**Development status: 0.2.0a0 development prototype.** This is NOT WinOLS parity, a general A2L parser, a complete calibration editor, a checksum utility, an ECU flasher, or a validated vehicle calibration solution.
+**Development status: 0.3.0a0 development prototype.** This is NOT WinOLS parity, a general A2L parser, a complete calibration editor, a checksum utility, an ECU flasher, or a validated vehicle calibration solution.
 
 ## Why a separate repository?
 
@@ -15,9 +15,9 @@ They should exchange versioned schemas and share tested upstream components, not
 ## Working prototype features
 
 - Read A2L PROJECT, MODULE, CHARACTERISTIC, RECORD_LAYOUT, MOD_COMMON and selected COMPU_METHOD data using a bounded parser.
-- Enumerate named characteristics for agents with JSON output.
-- Read VALUE scalars with explicit ECU memory base, byte order, integer storage, IDENTICAL and LINEAR scaling, and analytically invertible affine RAT_FUNC conversion.
-- Read 1D CURVE and 2D MAP data with sole contiguous FNC_VALUES layout plus FIX_AXIS or directly stored COM_AXIS axes. Export flat values and axis metadata; cell-coordinate mapping and table writing are not qualified.
+- Enumerate named characteristics and emit compact JSON structural summaries of large A2Ls without needing a BIN.
+- Read VALUE scalars with explicit ECU memory base, byte order, integer and read-only IEEE-754 float32/float64 storage, IDENTICAL/LINEAR scaling and affine RAT_FUNC conversion. Scalar writes remain integer-only.
+- Read 1D CURVE and 2D MAP data from narrowly defined contiguous FNC_VALUES plus FIX_AXIS/COM_AXIS or embedded STD_AXIS layouts, including selected NO_AXIS_PTS dynamic dimensions. Position 0 or 1, floating-point reads and fixed-axis floats are now supported. The embedded interpreter refuses unqualified padding, pointer and static offset layouts. Neither cell-coordinate mapping nor table writing is qualified.
 - Write supported scalar engineering-unit targets with exact-decimal inversion and a mandatory quantization-error gate if the target is not exactly representable.
 - Reject bit-masked scalars, read-only writes, address-space extensions and unsupported record addressing instead of silently modifying unrelated bits.
 - Export JSON that marks unsupported items explicitly instead of silently omitting them.
@@ -36,6 +36,7 @@ Python 3.10 or newer:
 
 ## Inspect and edit synthetic or matching data
 
+    kingai-a2l summary --a2l example.a2l
     kingai-a2l inspect --a2l example.a2l
     kingai-a2l read --a2l example.a2l --bin original.bin --base-address 0x80000000 --name SYMBOL
     kingai-a2l read-table --a2l example.a2l --bin original.bin --base-address 0x80000000 --name TABLE_SYMBOL
@@ -63,7 +64,7 @@ AI handles analysis and proposals. The CLI executes deterministic, bounded opera
 
 See [WinOLS parity and qualification matrix](docs/WINOLS_PARITY.md) and [cross-repository architecture](docs/ARCHITECTURE.md).
 
-**Not implemented:** A2L includes and full grammar, map writes, general nonlinear RAT_FUNC and conversion-table support, embedded STD_AXIS layouts, full multidimensional maps beyond 2D, DAMOS/KP/OLS proprietary project imports, disassembly/map detection, ADX/XDL import, log-to-cell correction, safe checksum modules, hardware IO, reverse-engineering semantic verification, native WinOLS equivalence tests.
+**Not implemented:** A2L includes and full grammar, map writes, float writes, general nonlinear RAT_FUNC and conversion-table support, complex/differential/INDEX_DECR axes, STATIC_RECORD_LAYOUT or STATIC_ADDRESS_OFFSETS placement, automatic padding/alignment, multi-dimensional maps beyond 2D, DAMOS/KP/OLS proprietary project imports, disassembly/map detection, ADX/XDL import, log-to-cell correction, safe checksum modules, hardware IO, reverse-engineering semantic verification, native WinOLS equivalence tests.
 
 Read [A2L fixture corpus triage](docs/RE_ANALYSIS_20261111.md) for the public test corpus and next unsupported structures.
 

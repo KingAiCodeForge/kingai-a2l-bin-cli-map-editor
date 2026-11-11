@@ -9,7 +9,7 @@ import math
 import struct
 from typing import TYPE_CHECKING
 
-from .core import A2LError, Block, STORAGE, _float, _lookup, _number
+from .core import A2LError, Block, READ_STORAGE, _float, _lookup, _number
 
 if TYPE_CHECKING:
     from .core import A2LDefinition
@@ -45,7 +45,7 @@ def _factors(desc: Block) -> tuple[int, float, float]:
 
 
 def _validated_physical(
-    definition: "A2LDefinition", conversion: str, raw_values: list[int],
+    definition: "A2LDefinition", conversion: str, raw_values: list[int | float],
     lower: float, upper: float
 ) -> list[float]:
     physical = [definition._physical(conversion, r) for r in raw_values]
@@ -56,19 +56,30 @@ def _validated_physical(
 
 def _fixed_axis(definition: "A2LDefinition", desc: Block) -> dict:
     count, lower, upper = _factors(desc)
+    methods = (int("FIX_AXIS_PAR_DIST" in desc.words)
+               + int("FIX_AXIS_PAR" in desc.words)
+               + len(desc.direct("FIX_AXIS_PAR_LIST")))
+    if methods != 1:
+        raise A2LError("FIX_AXIS requires exactly one supported point source")
     if "FIX_AXIS_PAR_DIST" in desc.words:
-        first, step, stated_count = (
-            _number(x) for x in _words_after(desc.words, "FIX_AXIS_PAR_DIST", 3)
-        )
+        first_str, step_str, count_str = _words_after(desc.words, "FIX_AXIS_PAR_DIST", 3)
+        first, step, stated_count = _float(first_str), _float(step_str), _number(count_str)
         if count != stated_count:
             raise A2LError("FIX_AXIS_PAR_DIST count differs from AXIS_DESCR")
         values = [first + n * step for n in range(count)]
         source = "FIX_AXIS_PAR_DIST"
+    elif "FIX_AXIS_PAR" in desc.words:
+        first_str, shift_str, count_str = _words_after(desc.words, "FIX_AXIS_PAR", 3)
+        first, shift, stated_count = _float(first_str), _float(shift_str), _number(count_str)
+        if count != stated_count:
+            raise A2LError("FIX_AXIS_PAR count differs from AXIS_DESCR")
+        if not -32 <= shift <= 32:
+            raise A2LError("FIX_AXIS_PAR shift is outside supported numeric limits")
+        values = [first + n * (2.0 ** shift) for n in range(count)]
+        source = "FIX_AXIS_PAR"
     else:
         lists = desc.direct("FIX_AXIS_PAR_LIST")
-        if len(lists) != 1:
-            raise A2LError("FIX_AXIS requires one supported PAR_DIST or PAR_LIST")
-        values = [_number(w) for w in lists[0].words]
+        values = [_float(w) for w in lists[0].words]
         if len(values) != count:
             raise A2LError("FIX_AXIS_PAR_LIST length differs from AXIS_DESCR")
         source = "FIX_AXIS_PAR_LIST"
@@ -97,14 +108,17 @@ def _external_axis(
         raise A2LError("COM_AXIS point count differs from referenced AXIS_PTS")
     record = definition._by_name("RECORD_LAYOUT", node.words[4])
     words = record.words
-    if (len(words) != 6 or words[1] != "AXIS_PTS_X" or words[2] != "1"
-            or words[3] not in STORAGE or words[4] != "INDEX_INCR"
+    if (len(words) != 6 or words[1] != "AXIS_PTS_X"
+            or words[2] not in ("0", "1")
+            or words[3] not in READ_STORAGE or words[4] != "INDEX_INCR"
             or words[5] != "DIRECT"):
         raise A2LError("COM_AXIS requires contiguous direct AXIS_PTS_X record layout")
-    fmt_char, size = STORAGE[words[3]]
+    fmt_char, size = READ_STORAGE[words[3]]
     address = _number(node.words[2])
     offset = _address(firmware, base_address, address, count * size)
     order = definition._item_byte_order(node)
+    if "BYTE_ORDER" in desc.words and definition._item_byte_order(desc) != order:
+        raise A2LError("COM_AXIS axis byte-order override conflicts with AXIS_PTS")
     raw_values = list(struct.unpack_from(order + fmt_char * count, firmware, offset))
     converted = _validated_physical(definition, desc.words[2], raw_values, lower, upper)
     return {"kind": "COM_AXIS", "source": axis_name, "stored": True,
@@ -123,6 +137,10 @@ def read_table(
     kind = words[2]
     if kind not in ("CURVE", "MAP"):
         raise A2LError(f"Only 1D CURVE and 2D MAP are supported, not {kind}")
+    if any(desc.words and desc.words[0] == "STD_AXIS"
+           for desc in node.direct("AXIS_DESCR")):
+        from .embedded import read_embedded
+        return read_embedded(definition, node, firmware, base_address)
     definition._guard_simple_address(node)
     if "BIT_MASK" in words:
         raise A2LError("BIT_MASK table requires mask-aware decoding")
@@ -151,12 +169,13 @@ def read_table(
     # The only supported layout is a single contiguous FNC_VALUES stream.
     # All mixed axis/ID/dynamic-length or reserved structures fail closed.
     layout = record.words
-    if (len(layout) != 6 or layout[1] != "FNC_VALUES" or layout[2] != "1"
-            or layout[3] not in STORAGE
+    if (len(layout) != 6 or layout[1] != "FNC_VALUES"
+            or layout[2] not in ("0", "1")
+            or layout[3] not in READ_STORAGE
             or layout[4] not in ("ROW_DIR", "COLUMN_DIR")
             or layout[5] != "DIRECT"):
-        raise A2LError("Table requires sole contiguous FNC_VALUES at position 1")
-    fmt_char, size = STORAGE[layout[3]]
+        raise A2LError("Table requires sole contiguous direct FNC_VALUES layout")
+    fmt_char, size = READ_STORAGE[layout[3]]
     address = _number(words[3])
     offset = _address(firmware, base_address, address, count * size)
     order = definition._item_byte_order(node)

@@ -21,6 +21,9 @@ STORAGE = {
     "UWORD": ("H", 2), "SWORD": ("h", 2),
     "ULONG": ("I", 4), "SLONG": ("i", 4),
 }
+# Float values are read-only until IEEE re-encoding, inverse conversions and
+# per-target native-tool parity have been independently qualified.
+READ_STORAGE = {**STORAGE, "FLOAT32_IEEE": ("f", 4), "FLOAT64_IEEE": ("d", 8)}
 ORDERS = {"MSB_FIRST": ">", "MSB_LAST": "<"}
 
 
@@ -181,21 +184,19 @@ class A2LDefinition:
     def _scalar_layout(self, layout_name: str) -> tuple[str, int]:
         record = self._by_name("RECORD_LAYOUT", layout_name)
         words = record.words
-        idx = _lookup(words, "FNC_VALUES")
-        if idx + 4 >= len(words):
-            raise A2LError("Incomplete FNC_VALUES record layout")
-        position = _number(words[idx + 1])
-        dtype = words[idx + 2]
-        if words[idx + 3] not in ("ROW_DIR", "COLUMN_DIR") or words[idx + 4] != "DIRECT":
+        # The record must contain exactly one sole, contiguous field.
+        # A second field (even IDENTIFICATION or ALIGNMENT) changes byte layout.
+        if len(words) != 6 or words[1] != "FNC_VALUES":
+            raise A2LError("Scalar requires sole contiguous FNC_VALUES record layout")
+        position = _number(words[2])
+        if position not in (0, 1):
+            raise A2LError("Unsupported FNC_VALUES position")
+        dtype = words[3]
+        if words[4] not in ("ROW_DIR", "COLUMN_DIR") or words[5] != "DIRECT":
             raise A2LError("Unsupported FNC_VALUES orientation or addressing mode")
-        if position != 1:
-            raise A2LError("FNC_VALUES not first in record layout; offset unverified")
-        if dtype not in STORAGE:
-            raise A2LError(f"Unsupported integer storage: {dtype}")
-        if any(w.startswith(("AXIS_PTS_", "NO_AXIS_PTS_", "RESERVED"))
-               for w in words):
-            raise A2LError("Composite record layout is not supported for scalar edits")
-        return STORAGE[dtype]
+        if dtype not in READ_STORAGE:
+            raise A2LError(f"Unsupported scalar data storage: {dtype}")
+        return READ_STORAGE[dtype]
 
     def _physical(self, method_name: str, raw: int) -> float:
         if method_name in ("NO_COMPU_METHOD", "IDENTICAL"):
@@ -295,6 +296,8 @@ class A2LDefinition:
             ):
                 raise A2LError("A2L CALIBRATION_ACCESS does not permit this write")
         layout = self.scalar(name)
+        if layout["fmt"][-1] not in "BbHhIi":
+            raise A2LError("Raw writes to IEEE floating-point scalar storage are unsupported")
         previous = self.read_scalar(name, firmware, base_address)
         physical = self._physical(layout["conversion"], new_raw)
         if not (layout["lower"] <= physical <= layout["upper"]):

@@ -48,3 +48,27 @@ Synthetic suite: **30 tests passed locally on both Python 3.11 and Python 3.13**
 GitHub Actions workflow exists for Python 3.10 and 3.13, but hosted jobs were blocked by the account-level GitHub Actions billing lock. Neither hosted Python version was validated in CI at this stage.
 
 No ECU communication, checksum repair or flashing support was created.
+
+## Follow-up: structure cross-reference and qualified read-only extensions
+
+Checked the experimental reader against publicly available ASAM/A2L reference material, MATLAB A2L conversion documentation, the Rust a2lfile specification and the local permissively licensed a2ltool corpus.
+
+1. **Record positions are ordinals, not byte offsets.** Within a composite RECORD_LAYOUT, each preceding field's actual storage length determines the next field's byte offset. The new bounded inline STD_AXIS interpreter handles direct, consecutive positions and optionally reads NO_AXIS_PTS_X/Y from the supplied BIN before calculating axis and FNC_VALUES lengths. It refuses static-address allocation, pointers, INDEX_DECR, unqualified padding and unsupported fields. Only read operations are allowed. This is a source-layout interpretation, not native ECU parity.
+2. **FNC_VALUES position 0 is a real pattern, not malformed.** In software_a.a2l, 539 VALUE symbols reference sole FNC_VALUES at position 0 and 2,539 reference sole FNC_VALUES at position 1. The previous parser rejected position 0 even for a sole contiguous field; the strict bounded reader now supports both.
+3. **IEEE data types matter materially.** Of 3,156 VALUE declarations in that obfuscated fixture, 3,078 use a sole contiguous FNC_VALUES record and 1,854 of those reference FLOAT32_IEEE storage. The new reader handles FLOAT32_IEEE/FLOAT64_IEEE raw reading and rejects float writes. These counts prove syntax coverage only: 844 of the 3,078 simple VALUE symbols reference a RAT_FUNC conversion and 237 reference TAB_VERB, neither of which automatically qualifies for physical-value decoding.
+4. **Fixed axes require multiple representations.** Added read-only FLOAT-valued FIX_AXIS_PAR_LIST, FIX_AXIS_PAR_DIST and bounded FIX_AXIS_PAR (offset plus indexed powers of two). Declared axis point counts are checked against computed lists. This corrects the previous integer-only fixed-axis assumption.
+5. **Composite scalar layouts are not simple scalar storage.** A layout may include IDENTIFICATION, RESERVED, axis count, alignment or other records. The previous scalar reader could silently treat such a declaration as an ordinary first-field scalar. It now requires a sole FNC_VALUES record; unsupported composite scalar reads and writes fail closed.
+6. **MONOTONY is defined over internal axis values.** Physical/display ordering alone cannot validate its constraint, especially with conversions and INDEX_DECR. The reader does not claim monotonicity validation or qualified table-coordinate mapping.
+7. **Byte-order and segmentation remain explicit risks.** A conflicting AXIS_DESCR byte-order override and AXIS_PTS byte-order is now rejected. Memory-segment mapping and a source BIN's software identity must still be independently proven.
+
+Reference material:
+- ASAM MCD-2 MC: https://www.asam.net/standards/detail/mcd-2-mc/
+- ASAM record-layout and static-offset release explanation: https://www.asam.net/index.php?eID=dumpFile&f=734&t=f&token=aff3202720d0a044bd82491c9354a93b7cf43d61
+- Rust a2lfile specification: https://docs.rs/a2lfile/latest/a2lfile/struct.RecordLayout.html
+- MATLAB conversion documentation: https://github.com/matlab/simulink-agentic-toolkit/blob/main/skills-catalog/code-generation/simulink-customize-a2l/references/compu-method-guidance.md
+
+The repo now has a **summary** CLI operation producing a compact, versioned structural inventory. This is preferable to flooding the agent's context with thousands of CHARACTERISTIC records.
+
+Cross-repository check: The existing local XDF editor source still contains multiple unpublished/dirty changes and a local pyproject version distinct from its published README. The local XDF checkout pins a specific Universal Exporter commit; it must not be silently overwritten, imported or synchronized by copying modules into the A2L repo. The XDF editor and Universal Exporter were inspected read-only.
+
+Remaining research gates: full ASAM grammar/includes, real A2L/BIN exact-pair validation, vendor extensions and calibration-page addressing, non-affine RAT_FUNC and verbal conversions, static address layouts and compiler padding, INDEX_DECR and monotonicity, 3D+ maps, native WinOLS/TunerPro parity, deterministic format-neutral export adapter and a qualified ADX/XDL log decoder. No flash/checksum tool was introduced.
