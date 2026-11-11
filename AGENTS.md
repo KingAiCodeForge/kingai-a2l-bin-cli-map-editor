@@ -2,7 +2,7 @@
 
 This repository is AI-first, NOT intended to silently write or flash vehicle ECUs.
 
-- Prefer python -m kingai_a2l inspect before other commands.
+- Prefer python -m kingai_a2l inspect before other commands. Use read-table only for the documented contiguous CURVE/MAP subset; report flat values, declared axis order and coordinate-mapping uncertainty.
 - Always report commands, input hashes, definition/module and the declared BIN base-address assumption.
 - Test on synthetic fixtures before changing parser/storage behavior.
 - Fail closed for unknown A2L features, ambiguous names, unsupported memory windows, missing byte order, overlapping or composite layouts.

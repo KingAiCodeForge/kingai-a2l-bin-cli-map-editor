@@ -88,7 +88,7 @@ class A2LTests(unittest.TestCase):
 
     def test_unknown_conversion_fails_closed(self):
         self.a2l.write_text(SAMPLE.replace("LINEAR", "RAT_FUNC", 1), encoding="utf-8")
-        with self.assertRaisesRegex(A2LError, "not supported"):
+        with self.assertRaisesRegex(A2LError, "Missing A2L keyword COEFFS"):
             self.definition().read_scalar("KTEST", self.bin.read_bytes(), 0x1000)
 
     def test_cli_read_and_export_incomplete_explicitly(self):

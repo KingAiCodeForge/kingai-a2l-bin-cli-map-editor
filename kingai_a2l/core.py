@@ -182,10 +182,12 @@ class A2LDefinition:
         record = self._by_name("RECORD_LAYOUT", layout_name)
         words = record.words
         idx = _lookup(words, "FNC_VALUES")
-        if idx + 2 >= len(words):
+        if idx + 4 >= len(words):
             raise A2LError("Incomplete FNC_VALUES record layout")
         position = _number(words[idx + 1])
         dtype = words[idx + 2]
+        if words[idx + 3] not in ("ROW_DIR", "COLUMN_DIR") or words[idx + 4] != "DIRECT":
+            raise A2LError("Unsupported FNC_VALUES orientation or addressing mode")
         if position != 1:
             raise A2LError("FNC_VALUES not first in record layout; offset unverified")
         if dtype not in STORAGE:
@@ -210,7 +212,31 @@ class A2LDefinition:
                 raise A2LError("Incomplete COEFFS_LINEAR")
             a, b = _float(method.words[idx + 1]), _float(method.words[idx + 2])
             return a * raw + b
+        if category == "RAT_FUNC":
+            idx = _lookup(method.words, "COEFFS")
+            if idx + 6 >= len(method.words):
+                raise A2LError("Incomplete RAT_FUNC coefficients")
+            a, b, c, d, e, f = (_float(x) for x in method.words[idx + 1:idx + 7])
+            # ASAM RAT_FUNC defines raw as a function of physical value.
+            # Only the analytically invertible affine subset is supported.
+            if a != 0 or d != 0 or e != 0 or b == 0 or f == 0:
+                raise A2LError("Nonlinear or noninvertible RAT_FUNC is unsupported")
+            return (f * raw - c) / b
         raise A2LError(f"Conversion {category} is not supported")
+
+    def _item_byte_order(self, node: Block) -> str:
+        words = node.words
+        if "BYTE_ORDER" not in words:
+            return self._byte_order()
+        idx = _lookup(words, "BYTE_ORDER")
+        if idx + 1 >= len(words) or words[idx + 1] not in ORDERS:
+            raise A2LError("Invalid per-item BYTE_ORDER override")
+        return ORDERS[words[idx + 1]]
+
+    @staticmethod
+    def _guard_simple_address(node: Block) -> None:
+        if "ECU_ADDRESS_EXTENSION" in node.words or "REF_MEMORY_SEGMENT" in node.words:
+            raise A2LError("Memory segment/extension addressing requires a qualified mapping")
 
     def scalar(self, name: str) -> dict:
         node = self._by_name("CHARACTERISTIC", name)
@@ -219,9 +245,12 @@ class A2LDefinition:
             raise A2LError("Incomplete CHARACTERISTIC")
         if words[2] != "VALUE":
             raise A2LError(f"Only VALUE scalars supported, not {words[2]}")
+        self._guard_simple_address(node)
+        if "BIT_MASK" in words:
+            raise A2LError("BIT_MASK requires mask-aware reads/writes; refusing scalar")
         fmt, size = self._scalar_layout(words[4])
         return {"name": name, "address": _number(words[3]),
-                "fmt": self._byte_order() + fmt, "size": size,
+                "fmt": self._item_byte_order(node) + fmt, "size": size,
                 "conversion": words[6],
                 "lower": _float(words[7]), "upper": _float(words[8])}
 
@@ -238,9 +267,33 @@ class A2LDefinition:
                 "bin_offset": offset, "raw": raw, "physical": physical,
                 "storage_format": layout["fmt"], "size": layout["size"]}
 
+    def read_table(self, name: str, firmware: bytes, base_address: int) -> dict:
+        # Deferred import keeps the narrow scalar and table adapters independent.
+        from .tables import read_table
+        return read_table(self, name, firmware, base_address)
+
+    def edit_physical(
+        self, name: str, firmware: bytes, base_address: int,
+        requested_physical: str, max_quantization_error: str = "0"
+    ) -> tuple[bytes, dict]:
+        from .engineering import edit_physical
+        return edit_physical(
+            self, name, firmware, base_address,
+            requested_physical, max_quantization_error
+        )
+
     def edit_raw(
         self, name: str, firmware: bytes, base_address: int, new_raw: int
     ) -> tuple[bytes, dict]:
+        node = self._by_name("CHARACTERISTIC", name)
+        if "READ_ONLY" in node.words:
+            raise A2LError("A2L declares this characteristic READ_ONLY")
+        if "CALIBRATION_ACCESS" in node.words:
+            idx = _lookup(node.words, "CALIBRATION_ACCESS")
+            if idx + 1 >= len(node.words) or node.words[idx + 1] not in (
+                "CALIBRATION", "OFFLINE_CALIBRATION"
+            ):
+                raise A2LError("A2L CALIBRATION_ACCESS does not permit this write")
         layout = self.scalar(name)
         previous = self.read_scalar(name, firmware, base_address)
         physical = self._physical(layout["conversion"], new_raw)

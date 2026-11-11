@@ -2,7 +2,7 @@
 
 AI-native, headless ECU calibration definition tooling for software agents. Built by KingAI Pty Ltd.
 
-**Development status: 0.1.0a0 prototype.** This is NOT WinOLS parity, a general A2L parser, a complete calibration editor, a checksum utility, an ECU flasher, or a validated vehicle calibration solution.
+**Development status: 0.2.0a0 development prototype.** This is NOT WinOLS parity, a general A2L parser, a complete calibration editor, a checksum utility, an ECU flasher, or a validated vehicle calibration solution.
 
 ## Why a separate repository?
 
@@ -16,7 +16,10 @@ They should exchange versioned schemas and share tested upstream components, not
 
 - Read A2L PROJECT, MODULE, CHARACTERISTIC, RECORD_LAYOUT, MOD_COMMON and selected COMPU_METHOD data using a bounded parser.
 - Enumerate named characteristics for agents with JSON output.
-- Read VALUE scalars with explicit ECU memory base, byte order, integer storage and IDENTICAL or LINEAR scaling.
+- Read VALUE scalars with explicit ECU memory base, byte order, integer storage, IDENTICAL and LINEAR scaling, and analytically invertible affine RAT_FUNC conversion.
+- Read 1D CURVE and 2D MAP data with sole contiguous FNC_VALUES layout plus FIX_AXIS or directly stored COM_AXIS axes. Export flat values and axis metadata; cell-coordinate mapping and table writing are not qualified.
+- Write supported scalar engineering-unit targets with exact-decimal inversion and a mandatory quantization-error gate if the target is not exactly representable.
+- Reject bit-masked scalars, read-only writes, address-space extensions and unsupported record addressing instead of silently modifying unrelated bits.
 - Export JSON that marks unsupported items explicitly instead of silently omitting them.
 - Write a **new BIN copy** for a strictly scoped raw integer scalar change, with exact SHA-256 checks for original BIN and A2L plus a JSON audit receipt.
 - Refuse unsupported map structures, conversion methods, missing byte order, unresolved A2L includes, invalid offsets, source-hash mismatches and output overwrites.
@@ -35,10 +38,14 @@ Python 3.10 or newer:
 
     kingai-a2l inspect --a2l example.a2l
     kingai-a2l read --a2l example.a2l --bin original.bin --base-address 0x80000000 --name SYMBOL
+    kingai-a2l read-table --a2l example.a2l --bin original.bin --base-address 0x80000000 --name TABLE_SYMBOL
     kingai-a2l export-json --a2l example.a2l --bin original.bin --base-address 0x80000000
     kingai-a2l edit-raw --a2l example.a2l --bin original.bin --base-address 0x80000000 --name SYMBOL --raw 120 --expected-sha256 ORIGINAL_BIN_SHA256 --expected-a2l-sha256 ORIGINAL_A2L_SHA256 --output review-copy.bin
+    kingai-a2l edit-physical --a2l example.a2l --bin original.bin --base-address 0x80000000 --name SYMBOL --physical 120.5 --max-quantization-error 0.1 --expected-sha256 ORIGINAL_BIN_SHA256 --expected-a2l-sha256 ORIGINAL_A2L_SHA256 --output quantized-review.bin
 
-The base address is illustrative, NOT an address to use on an actual ECU. The raw parameter accepts a storage integer, not a physical target. There is currently no reverse scaling or 1D/2D/3D map writing. Raw edits are not automatically safe for a vehicle.
+The base address is illustrative, NOT an address to use on an actual ECU. The raw parameter accepts a storage integer, not a physical target. Engineering-unit conversion is limited to affine methods and uses nearest-integer half-even quantization. There is no 1D/2D/3D map writing. Raw or engineering edits are not automatically safe for a vehicle.
+
+The export-json command currently exports supported scalars only; unsupported table items are labelled rather than represented as complete. Use read-table for the supported read-only 1D/2D subset.
 
 ## AI agent operating contract
 
@@ -56,7 +63,9 @@ AI handles analysis and proposals. The CLI executes deterministic, bounded opera
 
 See [WinOLS parity and qualification matrix](docs/WINOLS_PARITY.md) and [cross-repository architecture](docs/ARCHITECTURE.md).
 
-**Not implemented:** A2L includes and full grammar, map writes, RAT_FUNC and conversion table support, shared axes, multi-dimensional maps, DAMOS/KP/OLS proprietary project imports, disassembly/map detection, ADX/XDL import, log-to-cell correction, safe checksum modules, hardware IO, reverse-engineering semantic verification, native WinOLS equivalence tests.
+**Not implemented:** A2L includes and full grammar, map writes, general nonlinear RAT_FUNC and conversion-table support, embedded STD_AXIS layouts, full multidimensional maps beyond 2D, DAMOS/KP/OLS proprietary project imports, disassembly/map detection, ADX/XDL import, log-to-cell correction, safe checksum modules, hardware IO, reverse-engineering semantic verification, native WinOLS equivalence tests.
+
+Read [A2L fixture corpus triage](docs/RE_ANALYSIS_20261111.md) for the public test corpus and next unsupported structures.
 
 ## Safety and data
 

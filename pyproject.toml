@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kingai-a2l-bin-cli-map-editor"
-version = "0.1.0a0"
+version = "0.2.0a0"
 description = "AI-native, conservative A2L/BIN calibration inspection and scalar editing"
 readme = "README.md"
 requires-python = ">=3.10"

@@ -8,10 +8,10 @@ ASAM MCD-2 MC: https://www.asam.net/standards/detail/mcd-2-mc/
 | Capability | KingAI A2L status | Qualification before claiming parity |
 | --- | --- | --- |
 | A2L project and symbol import | Limited proof of concept | Real A2L grammar/version fixtures, includes, multiple MODULEs and malformed input tests |
-| Scalars and conversion methods | VALUE integer; IDENTICAL/LINEAR only | RAT_FUNC, COMPU_TAB, signed and floating values, quantization, byte-order cases |
-| 1D, 2D, 3D and higher maps | Not implemented | RECORD_LAYOUT indexing, offsets, strides, COM_AXIS/STD_AXIS/FIX_AXIS, up to ASAM 5D |
+| Scalars and conversion methods | Integer VALUE; IDENTICAL/LINEAR and affine RAT_FUNC, with guarded engineering-unit edit and explicit quantization | Nonlinear RAT_FUNC, COMPU_TAB, floats, bit fields, native fixture comparisons |
+| 1D, 2D, 3D and higher maps | CURVE/MAP read-only with sole contiguous FNC_VALUES and FIX_AXIS/limited COM_AXIS; no qualified coordinate mapping or writes | Dynamic STD_AXIS, composite RECORD_LAYOUT, exact row/column geometry, 3D+ and up to ASAM 5D |
 | ECU memory to BIN address mapping | Explicit single base address only | Segment-aware address transforms and proven software identity |
-| Binary-safe editing | Limited raw VALUE edit | Engineering-value edit planning, reversible conversions, output re-read, diff receipt |
+| Binary-safe editing | Guarded raw and engineering-value VALUE edits with SHA-256 identity, quantization bound, new BIN copy and audit | Multi-cell edit planning, richer conversions, overlap tests, checksum/hardware qualification |
 | A2L and BIN export | Partial JSON export; BIN scalar copy | Bounded all-map import/export, format conversion with explicit loss reporting |
 | Automated map finding | Not implemented | Real code/data identification and external trace evidence |
 | Project compare and change transfer | Not implemented | Exact identity, map-equivalence proof, offset matching, conflict tests |

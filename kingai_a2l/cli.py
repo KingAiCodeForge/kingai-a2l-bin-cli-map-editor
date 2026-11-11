@@ -20,7 +20,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="kingai-a2l", description="Conservative A2L/BIN scalar inspector and editor"
     )
     cmds = p.add_subparsers(dest="command", required=True)
-    for command in ("inspect", "read", "export-json", "edit-raw"):
+    for command in ("inspect", "read", "read-table", "export-json", "edit-raw", "edit-physical"):
         sp = cmds.add_parser(command)
         sp.add_argument("--a2l", required=True)
         sp.add_argument("--module", help="A2L MODULE name, required if ambiguous")
@@ -28,11 +28,17 @@ def build_parser() -> argparse.ArgumentParser:
             sp.add_argument("--bin", required=True, dest="bin_path")
             sp.add_argument("--base-address", required=True, type=_int,
                             help="Explicit ECU address represented by BIN offset zero")
-        if command in ("read", "edit-raw"):
+        if command in ("read", "read-table", "edit-raw", "edit-physical"):
             sp.add_argument("--name", required=True, help="Exact CHARACTERISTIC name")
-        if command == "edit-raw":
-            sp.add_argument("--raw", type=_int, required=True,
-                            help="Signed/unsigned raw storage integer, not engineering value")
+        if command in ("edit-raw", "edit-physical"):
+            if command == "edit-raw":
+                sp.add_argument("--raw", type=_int, required=True,
+                                help="Signed/unsigned raw integer, not engineering value")
+            else:
+                sp.add_argument("--physical", required=True,
+                                help="Engineering-unit decimal target")
+                sp.add_argument("--max-quantization-error", default="0",
+                                help="Max tolerated absolute engineering error; default 0")
             sp.add_argument("--expected-sha256", required=True,
                             help="SHA-256 of original BIN, mandatory")
             sp.add_argument("--expected-a2l-sha256", required=True,
@@ -63,6 +69,10 @@ def execute(args: argparse.Namespace) -> dict:
         return {**header, "item": definition.read_scalar(
             args.name, firmware, args.base_address
         )}
+    if args.command == "read-table":
+        return {**header, "item": definition.read_table(
+            args.name, firmware, args.base_address
+        )}
     if args.command == "export-json":
         records = []
         incomplete = False
@@ -84,7 +94,7 @@ def execute(args: argparse.Namespace) -> dict:
             return {**header, "complete": not incomplete, "report_path": str(output),
                     "item_count": len(records)}
         return result
-    if args.command == "edit-raw":
+    if args.command in ("edit-raw", "edit-physical"):
         if args.expected_sha256.lower() != sha256(firmware):
             raise A2LError("Source BIN SHA-256 mismatch: edit refused")
         if args.expected_a2l_sha256.lower() != definition.source_sha256:
@@ -94,9 +104,15 @@ def execute(args: argparse.Namespace) -> dict:
         if (output.exists() or audit.exists()
                 or output.resolve() == Path(args.bin_path).resolve()):
             raise A2LError("Output BIN/audit path already exists or equals source")
-        modified, change = definition.edit_raw(
-            args.name, firmware, args.base_address, args.raw
-        )
+        if args.command == "edit-raw":
+            modified, change = definition.edit_raw(
+                args.name, firmware, args.base_address, args.raw
+            )
+        else:
+            modified, change = definition.edit_physical(
+                args.name, firmware, args.base_address,
+                args.physical, args.max_quantization_error
+            )
         # Never overwrite an existing target. Restore on failed audit write.
         receipt = {
             **header, "output_sha256": sha256(modified),
