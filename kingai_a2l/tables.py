@@ -70,7 +70,7 @@ def _fixed_axis(definition: "A2LDefinition", desc: Block) -> dict:
         source = "FIX_AXIS_PAR_DIST"
     elif "FIX_AXIS_PAR" in desc.words:
         first_str, shift_str, count_str = _words_after(desc.words, "FIX_AXIS_PAR", 3)
-        first, shift, stated_count = _float(first_str), _float(shift_str), _number(count_str)
+        first, shift, stated_count = _float(first_str), _number(shift_str), _number(count_str)
         if count != stated_count:
             raise A2LError("FIX_AXIS_PAR count differs from AXIS_DESCR")
         if not -32 <= shift <= 32:
