@@ -124,20 +124,23 @@ class TableTests(unittest.TestCase):
         self.assertEqual(item["axes"][0]["raw_values"], [100, 102, 104])
         self.assertEqual(item["axes"][0]["physical_values"], [200, 204, 208])
 
-    def test_fixed_axis_par_rejects_fractional_offset_and_shift(self):
-        for value in ("FIX_AXIS_PAR 100.5 1 3", "FIX_AXIS_PAR 100 1.5 3"):
-            with self.subTest(value=value):
-                source = SAMPLE.replace("FIX_AXIS_PAR_DIST 100 100 3", value)
-                with self.assertRaisesRegex(A2LError, "Invalid integer"):
-                    self.definition(source).read_table("C_FIXED", self.firmware, 0x2000)
+    def test_fixed_axis_par_rejects_fractional_shift(self):
+        source = SAMPLE.replace("FIX_AXIS_PAR_DIST 100 100 3",
+                                "FIX_AXIS_PAR 100 1.5 3")
+        with self.assertRaisesRegex(A2LError, "Invalid integer"):
+            self.definition(source).read_table("C_FIXED", self.firmware, 0x2000)
 
-    def test_fixed_axis_par_dist_rejects_fractional_offset_and_distance(self):
-        for value in ("FIX_AXIS_PAR_DIST 100.5 100 3",
-                      "FIX_AXIS_PAR_DIST 100 100.5 3"):
-            with self.subTest(value=value):
-                source = SAMPLE.replace("FIX_AXIS_PAR_DIST 100 100 3", value)
-                with self.assertRaisesRegex(A2LError, "Invalid integer"):
-                    self.definition(source).read_table("C_FIXED", self.firmware, 0x2000)
+    def test_fixed_axis_par_preserves_fractional_offset(self):
+        source = SAMPLE.replace("FIX_AXIS_PAR_DIST 100 100 3",
+                                "FIX_AXIS_PAR 100.5 1 3")
+        result = self.definition(source).read_table("C_FIXED", self.firmware, 0x2000)
+        self.assertEqual(result["axes"][0]["raw_values"], [100.5, 102.5, 104.5])
+
+    def test_fixed_axis_par_dist_preserves_fractional_offset_and_distance(self):
+        source = SAMPLE.replace("FIX_AXIS_PAR_DIST 100 100 3",
+                                "FIX_AXIS_PAR_DIST 100.5 1.25 3")
+        result = self.definition(source).read_table("C_FIXED", self.firmware, 0x2000)
+        self.assertEqual(result["axes"][0]["raw_values"], [100.5, 101.75, 103.0])
 
     def test_fixed_axis_par_dist_negative_integer_distance(self):
         source = SAMPLE.replace("FIX_AXIS_PAR_DIST 100 100 3",
