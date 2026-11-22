@@ -63,14 +63,14 @@ def _fixed_axis(definition: "A2LDefinition", desc: Block) -> dict:
         raise A2LError("FIX_AXIS requires exactly one supported point source")
     if "FIX_AXIS_PAR_DIST" in desc.words:
         first_str, step_str, count_str = _words_after(desc.words, "FIX_AXIS_PAR_DIST", 3)
-        first, step, stated_count = _float(first_str), _float(step_str), _number(count_str)
+        first, step, stated_count = _number(first_str), _number(step_str), _number(count_str)
         if count != stated_count:
             raise A2LError("FIX_AXIS_PAR_DIST count differs from AXIS_DESCR")
         values = [first + n * step for n in range(count)]
         source = "FIX_AXIS_PAR_DIST"
     elif "FIX_AXIS_PAR" in desc.words:
         first_str, shift_str, count_str = _words_after(desc.words, "FIX_AXIS_PAR", 3)
-        first, shift, stated_count = _float(first_str), _float(shift_str), _number(count_str)
+        first, shift, stated_count = _number(first_str), _number(shift_str), _number(count_str)
         if count != stated_count:
             raise A2LError("FIX_AXIS_PAR count differs from AXIS_DESCR")
         if not -32 <= shift <= 32:
