@@ -24,6 +24,10 @@ def build_parser() -> argparse.ArgumentParser:
         sp = cmds.add_parser(command)
         sp.add_argument("--a2l", required=True)
         sp.add_argument("--module", help="A2L MODULE name, required if ambiguous")
+        sp.add_argument(
+            "--a2l-encoding", choices=("utf-8-sig", "latin-1"), default="utf-8-sig",
+            help="Explicit source text encoding; Latin-1 is read-only research, never auto-detected",
+        )
         if command not in ("inspect", "summary"):
             sp.add_argument("--bin", required=True, dest="bin_path")
             sp.add_argument("--base-address", required=True, type=_int,
@@ -47,11 +51,22 @@ def build_parser() -> argparse.ArgumentParser:
                             help="Must be a new path; never replaces source")
         if command == "export-json":
             sp.add_argument("--output", help="New JSON report path, otherwise stdout")
+            sp.add_argument("--include-tables", action="store_true",
+                            help="Include supported read-only CURVE/MAP data; preserve flat storage order")
+            sp.add_argument("--max-table-values", type=int, default=262144,
+                            help="Total table cells and axis points permitted in this export (1..1048576)")
     return p
 
 
 def execute(args: argparse.Namespace) -> dict:
-    definition = A2LDefinition.load(args.a2l, args.module)
+    # Legacy text admission is intentionally READ-ONLY until writing and
+    # original-file encoding/byte geometry are separately qualified.
+    encoding = getattr(args, "a2l_encoding", "utf-8-sig")
+    if args.command in ("edit-raw", "edit-physical") and encoding != "utf-8-sig":
+        raise A2LError("Latin-1 A2L admission is read-only; refusing edits")
+    definition = A2LDefinition.load(
+        args.a2l, args.module, source_encoding=encoding
+    )
     header = {
         "schema": "kingai.a2l-bin.cli-result.v0",
         "command": args.command,
@@ -79,23 +94,49 @@ def execute(args: argparse.Namespace) -> dict:
     if args.command == "export-json":
         records = []
         incomplete = False
+        include_tables = getattr(args, "include_tables", False)
+        max_values = getattr(args, "max_table_values", 262144)
+        if type(max_values) is not int or not 1 <= max_values <= 1048576:
+            raise A2LError("Table export budget must be between 1 and 1048576 values")
+        table_values = 0
+        table_count = 0
         for item in definition.characteristics():
             try:
-                row = definition.read_scalar(item["name"], firmware, args.base_address)
+                if include_tables and item.get("kind") in ("CURVE", "MAP"):
+                    row = definition.read_table(item["name"], firmware, args.base_address)
+                    cost = len(row["flat_raw_values"]) + sum(
+                        len(axis["raw_values"]) for axis in row["axes"]
+                    )
+                    if table_values + cost > max_values:
+                        raise A2LError("Aggregate table export budget exceeded")
+                    table_values += cost
+                    table_count += 1
+                else:
+                    row = definition.read_scalar(item["name"], firmware, args.base_address)
                 records.append({"status": "read", **row})
             except A2LError as exc:
                 incomplete = True
                 records.append({"name": item["name"], "status": "unsupported",
                                 "reason": str(exc)})
         result = {**header, "complete": not incomplete, "items": records}
+        if include_tables:
+            result.update({"table_export": {
+                "read_only": True, "table_count": table_count,
+                "value_count": table_values, "max_values": max_values,
+                "cell_coordinate_mapping_qualified": False,
+                "firmware_usage_verified": False,
+            }})
         if args.output:
             output = Path(args.output)
             if output.exists() or output.resolve() == Path(args.bin_path).resolve():
                 raise A2LError("Export report path must be new")
             with output.open("x", encoding="utf-8") as f:
                 f.write(dump_json(result) + "\n")
-            return {**header, "complete": not incomplete, "report_path": str(output),
-                    "item_count": len(records)}
+            summary = {**header, "complete": not incomplete, "report_path": str(output),
+                       "item_count": len(records)}
+            if include_tables:
+                summary["table_export"] = result["table_export"]
+            return summary
         return result
     if args.command in ("edit-raw", "edit-physical"):
         if args.expected_sha256.lower() != sha256(firmware):

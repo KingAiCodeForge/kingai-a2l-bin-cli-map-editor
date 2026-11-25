@@ -16,15 +16,15 @@ They should exchange versioned schemas and share tested upstream components, not
 
 - Read A2L PROJECT, MODULE, CHARACTERISTIC, RECORD_LAYOUT, MOD_COMMON and selected COMPU_METHOD data using a bounded parser.
 - Enumerate named characteristics and emit compact JSON structural summaries of large A2Ls without needing a BIN.
-- Read VALUE scalars with explicit ECU memory base, byte order, integer and read-only IEEE-754 float32/float64 storage, IDENTICAL/LINEAR scaling and affine RAT_FUNC conversion. Scalar writes remain integer-only.
-- Read 1D CURVE and 2D MAP data from narrowly defined contiguous FNC_VALUES plus FIX_AXIS/COM_AXIS or embedded STD_AXIS layouts, including selected NO_AXIS_PTS dynamic dimensions. Position 0 or 1, floating-point reads and fixed-axis floats are now supported. The embedded interpreter refuses unqualified padding, pointer and static offset layouts. Neither cell-coordinate mapping nor table writing is qualified.
+- Read VALUE scalars with explicit ECU memory base, byte order, integer and read-only IEEE-754 float32/float64 storage, IDENTICAL/LINEAR scaling, bounded affine FORMULA and invertible fractional-linear RAT_FUNC conversions. The additional FORMULA/fractional-linear conversions are read-only; existing scalar write admission is unchanged.
+- Read 1D CURVE and 2D MAP data from narrowly defined contiguous FNC_VALUES plus FIX_AXIS/COM_AXIS or embedded STD_AXIS layouts, including selected NO_AXIS_PTS dynamic dimensions. Synthetic golden fixtures now cover explicit MOD_COMMON/RECORD_LAYOUT alignment, BYTE/WORD/LONG RESERVED fields, eight data widths, calculated FNC_VALUES offsets and direct INDEX_DECR logical axis order. The embedded reader still rejects undeclared padding, pointers and static allocation; no table cell-coordinate mapping or map writing is qualified.
 - Write supported scalar engineering-unit targets with exact-decimal inversion and a mandatory quantization-error gate if the target is not exactly representable.
 - Reject bit-masked scalars, read-only writes, address-space extensions and unsupported record addressing instead of silently modifying unrelated bits.
 - Export JSON that marks unsupported items explicitly instead of silently omitting them.
 - Write a **new BIN copy** for a strictly scoped raw integer scalar change, with exact SHA-256 checks for original BIN and A2L plus a JSON audit receipt.
 - Refuse unsupported map structures, conversion methods, missing byte order, unresolved A2L includes, invalid offsets, source-hash mismatches and output overwrites.
 
-No real ECU family or A2L file is qualified. All current tests use synthetic definitions.
+No real ECU family or matched A2L/BIN pair is qualified. The RECORD_LAYOUT golden tests use synthetic bytes only; separate source-pinned tests do not establish native-tool parity.
 
 ## Install
 
@@ -46,7 +46,7 @@ Python 3.10 or newer:
 
 The base address is illustrative, NOT an address to use on an actual ECU. The raw parameter accepts a storage integer, not a physical target. Engineering-unit conversion is limited to affine methods and uses nearest-integer half-even quantization. There is no 1D/2D/3D map writing. Raw or engineering edits are not automatically safe for a vehicle.
 
-The export-json command currently exports supported scalars only; unsupported table items are labelled rather than represented as complete. Use read-table for the supported read-only 1D/2D subset.
+The export-json command defaults to supported scalar export for compatibility. Add `--include-tables` to include supported read-only CURVE/MAP values, axis values, dimensions, flat storage order and dynamic record offsets. Unsupported definitions and tables exceeding `--max-table-values` (default 262144; allowed 1–1048576, counted as raw cells plus axis points) are explicitly reported, with `complete: false`. Export summaries preserve the table count, value budget and unqualified coordinate-mapping status. No map writing, native editor parity or ECU-code consumer verification is implied.
 
 ## AI agent operating contract
 
@@ -64,7 +64,7 @@ AI handles analysis and proposals. The CLI executes deterministic, bounded opera
 
 See [WinOLS parity and qualification matrix](docs/WINOLS_PARITY.md) and [cross-repository architecture](docs/ARCHITECTURE.md).
 
-**Not implemented:** A2L includes and full grammar, map writes, float writes, general nonlinear RAT_FUNC and conversion-table support, complex/differential/INDEX_DECR axes, STATIC_RECORD_LAYOUT or STATIC_ADDRESS_OFFSETS placement, automatic padding/alignment, multi-dimensional maps beyond 2D, DAMOS/KP/OLS proprietary project imports, disassembly/map detection, ADX/XDL import, log-to-cell correction, safe checksum modules, hardware IO, reverse-engineering semantic verification, native WinOLS equivalence tests.
+**Not implemented:** A2L includes and full grammar, map writes, float writes, quadratic/nonunique RAT_FUNC, non-affine formulas and conversion-table support, complex/differential axes, pointer addressing, undeclared alignment padding, STATIC_RECORD_LAYOUT or STATIC_ADDRESS_OFFSETS placement, multi-dimensional maps beyond 2D, DAMOS/KP/OLS proprietary project imports, disassembly/map detection, ADX/XDL import, log-to-cell correction, safe checksum modules, hardware IO, reverse-engineering semantic verification, native WinOLS equivalence tests.
 
 Read [A2L fixture corpus triage](docs/RE_ANALYSIS_20261111.md) for the public test corpus and next unsupported structures.
 

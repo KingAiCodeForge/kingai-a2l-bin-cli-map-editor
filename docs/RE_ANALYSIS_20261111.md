@@ -4,7 +4,7 @@ Status: read-only static parser inspection of public reference fixtures plus syn
 
 ## Source provenance
 
-Local source: A:\repos\a2ltool\fixtures\a2l, from the permissively licensed a2ltool project (DanielT/a2ltool). The source files were inspected in place. No third-party A2L files or customer firmware were copied into this public repository.
+Reference source: the fixtures/a2l directory in the permissively licensed a2ltool project (DanielT/a2ltool). The source files were inspected in place. No third-party A2L files or customer firmware were copied into this public repository.
 
 Official technical reference: https://www.asam.net/standards/detail/mcd-2-mc/wiki/
 

@@ -6,8 +6,11 @@ Unknown features fail closed rather than being interpreted approximately.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
+import ast
 import hashlib
 import json
+import math
 from pathlib import Path
 import re
 import struct
@@ -113,6 +116,52 @@ def _float(s: str) -> float:
     return v
 
 
+@lru_cache(maxsize=4096)
+def _affine_formula(token: str) -> tuple[float, float]:
+    """Decode a quoted, numeric, affine FORMULA without executing source text."""
+    if len(token) < 3 or len(token) > 258 or token[0] != '"' or token[-1] != '"':
+        raise A2LError("Invalid quoted FORMULA")
+    expression = token[1:-1].strip()
+    if not expression or not re.fullmatch(r"[0-9eE.X+*/() \t-]+", expression):
+        raise A2LError("Unsupported FORMULA syntax")
+    try:
+        tree = ast.parse(expression, mode="eval")
+    except (SyntaxError, ValueError, RecursionError) as exc:
+        raise A2LError("Invalid FORMULA syntax") from exc
+
+    def reduce(node):
+        if isinstance(node, ast.Name) and node.id == "X":
+            result = (1.0, 0.0)
+        elif isinstance(node, ast.Constant) and type(node.value) in (int, float):
+            result = (0.0, float(node.value))
+        elif isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub)):
+            a, b = reduce(node.operand)
+            sign = -1 if isinstance(node.op, ast.USub) else 1
+            result = (sign*a, sign*b)
+        elif isinstance(node, ast.BinOp):
+            a, b = reduce(node.left)
+            c, d = reduce(node.right)
+            if isinstance(node.op, ast.Add):
+                result = (a+c, b+d)
+            elif isinstance(node.op, ast.Sub):
+                result = (a-c, b-d)
+            elif isinstance(node.op, ast.Mult) and (a == 0 or c == 0):
+                result = (a*d+c*b, b*d)
+            elif isinstance(node.op, ast.Div) and c == 0 and d != 0:
+                result = (a/d, b/d)
+            else:
+                raise A2LError("Non-affine or undefined FORMULA operation")
+        else:
+            raise A2LError("Unsupported FORMULA expression")
+        if not all(math.isfinite(v) for v in result):
+            raise A2LError("Non-finite FORMULA coefficient")
+        return result
+    try:
+        return reduce(tree.body)
+    except (OverflowError, RecursionError) as exc:
+        raise A2LError("FORMULA numeric or nesting limit") from exc
+
+
 def _lookup(words: tuple[str, ...], name: str) -> int:
     try:
         return words.index(name)
@@ -134,15 +183,28 @@ class A2LDefinition:
     module: Block
 
     @classmethod
-    def load(cls, source_path: str | Path, module: str | None = None) -> "A2LDefinition":
+    def load(
+        cls, source_path: str | Path, module: str | None = None, *,
+        source_encoding: str = "utf-8-sig",
+    ) -> "A2LDefinition":
+        """Source-preserving, explicitly encoded A2L load; never auto-guess codecs.
+
+        Historical source files may use Latin-1 labels/comments. That option
+        requires deliberate opt-in; unknown encodings, binary data and
+        unresolved A2L includes are rejected without modifying the source.
+        """
+        if source_encoding not in ("utf-8-sig", "latin-1"):
+            raise A2LError("Unsupported explicit A2L encoding")
         path = Path(source_path)
         if path.stat().st_size > MAX_A2L_BYTES:
             raise A2LError("A2L is larger than the bounded import limit")
         blob = path.read_bytes()
         try:
-            text = blob.decode("utf-8-sig")
+            text = blob.decode(source_encoding)
         except UnicodeDecodeError as exc:
-            raise A2LError("Only UTF-8 A2L supported in this prototype") from exc
+            raise A2LError("Only UTF-8 A2L supported by default; explicitly choose Latin-1 for legacy files") from exc
+        if "\x00" in text:
+            raise A2LError("NUL bytes are not valid in an A2L source document")
         roots = parse_a2l(text)
         modules = [m for project in roots if project.kind == "PROJECT"
                    for m in project.direct("MODULE")]
@@ -213,16 +275,37 @@ class A2LDefinition:
                 raise A2LError("Incomplete COEFFS_LINEAR")
             a, b = _float(method.words[idx + 1]), _float(method.words[idx + 2])
             return a * raw + b
+        if category == "FORM":
+            if method.words.count("FORMULA") != 1 or method.direct("FORMULA"):
+                raise A2LError("Exactly one inline FORMULA is required")
+            idx = _lookup(method.words, "FORMULA")
+            if idx + 1 >= len(method.words):
+                raise A2LError("Incomplete FORMULA")
+            gain, offset = _affine_formula(method.words[idx+1])
+            value = gain * raw + offset
+            if not math.isfinite(value):
+                raise A2LError("Non-finite FORMULA result")
+            return value
         if category == "RAT_FUNC":
             idx = _lookup(method.words, "COEFFS")
-            if idx + 6 >= len(method.words):
-                raise A2LError("Incomplete RAT_FUNC coefficients")
+            if method.words.count("COEFFS") != 1 or idx + 6 >= len(method.words):
+                raise A2LError("Incomplete or ambiguous RAT_FUNC coefficients")
             a, b, c, d, e, f = (_float(x) for x in method.words[idx + 1:idx + 7])
-            # ASAM RAT_FUNC defines raw as a function of physical value.
-            # Only the analytically invertible affine subset is supported.
-            if a != 0 or d != 0 or e != 0 or b == 0 or f == 0:
-                raise A2LError("Nonlinear or noninvertible RAT_FUNC is unsupported")
-            return (f * raw - c) / b
+            # The declared direction is physical -> raw. Invert only the
+            # single-valued linear/fractional-linear subset for reading.
+            if a != 0 or d != 0:
+                raise A2LError("Nonlinear RAT_FUNC is unsupported")
+            determinant = b*f-c*e
+            if not math.isfinite(determinant) or determinant == 0:
+                raise A2LError("Noninvertible RAT_FUNC coefficients")
+            denominator = b-e*raw
+            if not math.isfinite(denominator) or denominator == 0:
+                raise A2LError("RAT_FUNC inverse pole")
+            value = (f*raw-c)/denominator
+            source_denominator = e*value+f
+            if not math.isfinite(value) or not math.isfinite(source_denominator) or source_denominator == 0:
+                raise A2LError("Undefined or non-finite RAT_FUNC result")
+            return value
         raise A2LError(f"Conversion {category} is not supported")
 
     def _item_byte_order(self, node: Block) -> str:
@@ -298,6 +381,21 @@ class A2LDefinition:
         layout = self.scalar(name)
         if layout["fmt"][-1] not in "BbHhIi":
             raise A2LError("Raw writes to IEEE floating-point scalar storage are unsupported")
+        # Newly qualified FORM and fractional-linear RAT_FUNC conversions
+        # are read-only. Retain the original write-conversion admission.
+        conversion = layout["conversion"]
+        if conversion not in ("NO_COMPU_METHOD", "IDENTICAL"):
+            method = self._by_name("COMPU_METHOD", conversion)
+            if len(method.words) < 3:
+                raise A2LError("Incomplete COMPU_METHOD")
+            if method.words[2] == "FORM":
+                raise A2LError("FORM conversion is read-only")
+            if method.words[2] == "RAT_FUNC":
+                idx = _lookup(method.words, "COEFFS")
+                if idx+6 >= len(method.words):
+                    raise A2LError("Incomplete RAT_FUNC coefficients")
+                if _float(method.words[idx+5]) != 0:
+                    raise A2LError("Fractional-linear RAT_FUNC conversion is read-only")
         previous = self.read_scalar(name, firmware, base_address)
         physical = self._physical(layout["conversion"], new_raw)
         if not (layout["lower"] <= physical <= layout["upper"]):
