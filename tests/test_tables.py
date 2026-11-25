@@ -112,6 +112,65 @@ class TableTests(unittest.TestCase):
         self.assertEqual(item["dimensions"], [2, 3])
         self.assertFalse(item["cell_coordinate_mapping_qualified"])
 
+    def export_tables(self, *flags):
+        from kingai_a2l.cli import build_parser, execute
+        args = build_parser().parse_args([
+            "export-json", "--a2l", str(self.path), "--bin", str(self.bin_path),
+            "--base-address", "0x2000", *flags])
+        return execute(args)
+
+    def test_opt_in_table_export_exact_reader_parity(self):
+        result = self.export_tables("--include-tables")
+        self.assertTrue(result["complete"])
+        self.assertEqual(result["table_export"]["table_count"], 2)
+        self.assertEqual(result["table_export"]["value_count"], 17)
+        for item in result["items"]:
+            expected = self.definition().read_table(item["name"], self.firmware, 0x2000)
+            self.assertEqual(item, {"status": "read", **expected})
+        self.assertFalse(result["flash_ready"])
+        self.assertFalse(result["table_export"]["firmware_usage_verified"])
+        self.assertEqual(bytes(self.firmware), self.bin_path.read_bytes())
+
+    def test_scalar_only_export_remains_compatible(self):
+        result = self.export_tables()
+        self.assertFalse(result["complete"])
+        self.assertNotIn("table_export", result)
+        self.assertEqual([x["status"] for x in result["items"]], ["unsupported"] * 2)
+
+    def test_table_export_aggregate_budget(self):
+        result = self.export_tables("--include-tables", "--max-table-values", "6")
+        self.assertFalse(result["complete"])
+        self.assertEqual(result["table_export"]["value_count"], 6)
+        self.assertEqual(result["items"][0]["status"], "read")
+        self.assertIn("budget exceeded", result["items"][1]["reason"])
+
+    def test_table_export_invalid_budget(self):
+        for n in ("0", "-1", "1048577"):
+            with self.subTest(n=n), self.assertRaisesRegex(A2LError, "budget"):
+                self.export_tables("--include-tables", "--max-table-values", n)
+
+    def test_table_export_unsupported_axis_preserves_other_items(self):
+        self.definition(SAMPLE.replace("AXIS_PTS_REF RPM", "AXIS_PTS_REF NOT_FOUND"))
+        result = self.export_tables("--include-tables")
+        self.assertFalse(result["complete"])
+        self.assertEqual(result["table_export"]["table_count"], 1)
+        self.assertEqual(result["items"][0]["status"], "read")
+        self.assertEqual(result["items"][1]["status"], "unsupported")
+        self.assertIn("AXIS_PTS", result["items"][1]["reason"])
+
+    def test_table_export_new_report_and_no_overwrite(self):
+        report = self.folder / "report.json"
+        summary = self.export_tables("--include-tables", "--output", str(report))
+        result = json.loads(report.read_text(encoding="utf-8"))
+        self.assertTrue(result["complete"])
+        self.assertEqual(summary["table_export"], result["table_export"])
+        self.assertEqual(summary["item_count"], 2)
+        self.assertEqual(summary["report_path"], str(report))
+        original = report.read_bytes()
+        with self.assertRaisesRegex(A2LError, "path must be new"):
+            self.export_tables("--include-tables", "--output", str(report))
+        self.assertEqual(report.read_bytes(), original)
+
     def test_table_edit_is_still_disallowed(self):
         d = self.definition()
         with self.assertRaisesRegex(A2LError, "Only VALUE"):

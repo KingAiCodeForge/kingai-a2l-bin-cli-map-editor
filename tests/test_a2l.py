@@ -128,5 +128,47 @@ class A2LTests(unittest.TestCase):
         self.assertEqual(again.returncode, 2)
 
 
+
+    def test_explicit_legacy_encoding_rejects_unknown_binary_and_unresolved_include(self):
+        with self.assertRaisesRegex(A2LError, "encoding"):
+            A2LDefinition.load(self.a2l, source_encoding="cp1252")
+        self.a2l.write_bytes(SAMPLE.encode("utf-8") + b"\x00")
+        for encoding in ("utf-8-sig", "latin-1"):
+            with self.subTest(encoding=encoding):
+                with self.assertRaisesRegex(A2LError, "NUL"):
+                    A2LDefinition.load(self.a2l, source_encoding=encoding)
+        self.a2l.write_text('/include "missing_fixture.a2l"\n' + SAMPLE, encoding="utf-8")
+        with self.assertRaisesRegex(A2LError, "include"):
+            A2LDefinition.load(self.a2l, source_encoding="latin-1")
+
+    def test_explicit_latin1_cli_summary_and_edit_refusal(self):
+        self.a2l.write_bytes(
+            SAMPLE.replace("Synthetic project", "Prüfung").encode("latin-1")
+        )
+        r = self.run_cli(
+            "summary", "--a2l", str(self.a2l), "--a2l-encoding", "latin-1"
+        )
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(
+            json.loads(r.stdout)["a2l_sha256"],
+            hashlib.sha256(self.a2l.read_bytes()).hexdigest(),
+        )
+        rejected = self.run_cli("summary", "--a2l", str(self.a2l))
+        self.assertEqual(rejected.returncode, 2)
+        dest = self.root / "must_not_write.bin"
+        blocked = self.run_cli(
+            "edit-raw", "--a2l", str(self.a2l),
+            "--a2l-encoding", "latin-1", "--bin", str(self.bin),
+            "--base-address", "0x1000", "--name", "KTEST", "--raw", "300",
+            "--expected-sha256", hashlib.sha256(self.bin.read_bytes()).hexdigest(),
+            "--expected-a2l-sha256", hashlib.sha256(self.a2l.read_bytes()).hexdigest(),
+            "--output", str(dest),
+        )
+        self.assertEqual(blocked.returncode, 2)
+        self.assertIn("read-only", blocked.stderr)
+        self.assertFalse(dest.exists())
+        self.assertEqual(self.bin.read_bytes(), bytes(self.source))
+
+
 if __name__ == "__main__":
     unittest.main()

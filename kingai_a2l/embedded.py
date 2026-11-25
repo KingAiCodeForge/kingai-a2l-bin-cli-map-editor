@@ -1,8 +1,8 @@
 """Conservative read-only inline STD_AXIS RECORD_LAYOUT interpreter.
 
 Positions are ordinals, not offsets. Offsets depend on counts, storage widths,
-and potential alignment. We refuse layouts requiring an unqualified pad,
-pointer dereference, or static-address-offset interpretation. No map writes.
+and explicit alignment. Undeclared padding, pointers, and static-offset
+allocation remain unsupported. No map writes.
 """
 from __future__ import annotations
 
@@ -28,8 +28,15 @@ ROLE_WIDTHS = {
     "NO_AXIS_PTS_Y": 3,
     "FIX_NO_AXIS_PTS_X": 2,
     "FIX_NO_AXIS_PTS_Y": 2,
+    "RESERVED": 3,
 }
 COUNT_FORMATS = {"UBYTE", "UWORD", "ULONG"}
+# ASAM RESERVED uses datasize keywords, not the signed/unsigned storage types.
+RESERVED_WIDTHS = {"BYTE": 1, "WORD": 2, "LONG": 4}
+ALIGNMENT_TAGS = {
+    "ALIGNMENT_BYTE", "ALIGNMENT_WORD", "ALIGNMENT_LONG",
+    "ALIGNMENT_FLOAT32_IEEE", "ALIGNMENT_FLOAT64_IEEE",
+}
 AXIS_KEYS = ("X", "Y")
 
 
@@ -42,14 +49,21 @@ class RecordField:
     addressing: str | None = None
 
 
-def _parse_layout(words: tuple[str, ...]) -> tuple[list[RecordField], dict[str, int]]:
+def _parse_layout(words: tuple[str, ...]) -> tuple[list[RecordField], dict[str, int], dict[str, int]]:
     if not words:
         raise A2LError("Empty record layout")
     pos = 1  # first word is layout name
     fields = []
     fixed = {}
+    alignments = {}
     while pos < len(words):
         role = words[pos]
+        if role in ALIGNMENT_TAGS:
+            if pos + 1 >= len(words) or role in alignments:
+                raise A2LError(f"Invalid or duplicated RECORD_LAYOUT alignment {role}")
+            alignments[role] = _checked_alignment(_number(words[pos + 1]))
+            pos += 2
+            continue
         if role not in ROLE_WIDTHS:
             raise A2LError(f"Unqualified composite RECORD_LAYOUT feature: {role}")
         width = ROLE_WIDTHS[role]
@@ -64,20 +78,24 @@ def _parse_layout(words: tuple[str, ...]) -> tuple[list[RecordField], dict[str, 
         else:
             ordinal = _number(tokens[0])
             dtype = tokens[1]
-            if dtype not in READ_STORAGE:
+            if role == "RESERVED":
+                if dtype not in RESERVED_WIDTHS:
+                    raise A2LError(f"Unsupported RESERVED datasize {dtype}")
+                fields.append(RecordField(role, ordinal, dtype))
+            elif dtype not in READ_STORAGE:
                 raise A2LError(f"Unsupported inline storage {dtype}")
-            if role.startswith("NO_AXIS_PTS_"):
+            elif role.startswith("NO_AXIS_PTS_"):
                 if dtype not in COUNT_FORMATS:
                     raise A2LError("Axis count field must be an unsigned integer")
                 fields.append(RecordField(role, ordinal, dtype))
             else:
                 index, addressing = tokens[2], tokens[3]
-                expected = ("ROW_DIR", "COLUMN_DIR") if role == "FNC_VALUES" else ("INDEX_INCR",)
+                expected = ("ROW_DIR", "COLUMN_DIR") if role == "FNC_VALUES" else ("INDEX_INCR", "INDEX_DECR")
                 if index not in expected or addressing != "DIRECT":
                     raise A2LError(f"Unsupported inline indexing or addressing for {role}")
                 fields.append(RecordField(role, ordinal, dtype, index, addressing))
         pos += width
-    roles = [f.role for f in fields]
+    roles = [f.role for f in fields if f.role != "RESERVED"]
     if roles.count("FNC_VALUES") != 1 or len(set(roles)) != len(roles):
         raise A2LError("Expected one FNC_VALUES and no duplicate inline fields")
     ordinals = [f.position for f in fields]
@@ -90,34 +108,44 @@ def _parse_layout(words: tuple[str, ...]) -> tuple[list[RecordField], dict[str, 
         raise A2LError("RECORD_LAYOUT positions must be consecutive for this interpreter")
     if fields and fields[0].position not in (0, 1):
         raise A2LError("Unexpected first RECORD_LAYOUT ordinal")
-    return fields, fixed
+    return fields, fixed, alignments
 
 
-def _module_alignment(definition: "A2LDefinition", dtype: str, width: int) -> int:
+def _checked_alignment(alignment: int) -> int:
+    if alignment <= 0 or alignment > 16 or (alignment & (alignment - 1)):
+        raise A2LError(f"Unsupported declared alignment: {alignment}")
+    return alignment
+
+
+def _module_alignment(
+    definition: "A2LDefinition", dtype: str, width: int,
+    record_alignments: dict[str, int],
+) -> tuple[int, bool]:
     tag = {
-        "UBYTE": "ALIGNMENT_BYTE", "SBYTE": "ALIGNMENT_BYTE",
-        "UWORD": "ALIGNMENT_WORD", "SWORD": "ALIGNMENT_WORD",
-        "ULONG": "ALIGNMENT_LONG", "SLONG": "ALIGNMENT_LONG",
+        "UBYTE": "ALIGNMENT_BYTE", "SBYTE": "ALIGNMENT_BYTE", "BYTE": "ALIGNMENT_BYTE",
+        "UWORD": "ALIGNMENT_WORD", "SWORD": "ALIGNMENT_WORD", "WORD": "ALIGNMENT_WORD",
+        "ULONG": "ALIGNMENT_LONG", "SLONG": "ALIGNMENT_LONG", "LONG": "ALIGNMENT_LONG",
         "FLOAT32_IEEE": "ALIGNMENT_FLOAT32_IEEE",
         "FLOAT64_IEEE": "ALIGNMENT_FLOAT64_IEEE",
     }.get(dtype)
     if tag is None:
         raise A2LError(f"Unhandled alignment data type {dtype}")
-    # Avoid inserting guessed padding: explicit alignment is checked, never
-    # silently applied. Unknown record-level alignment was rejected by parser.
     mods = definition.module.direct("MOD_COMMON")
     if len(mods) != 1:
         raise A2LError("Exactly one MOD_COMMON required for inline storage")
     vals = mods[0].words
+    if vals.count(tag) > 1:
+        raise A2LError(f"Duplicate MOD_COMMON alignment {tag}")
+    # A record-level declaration overrides MOD_COMMON. No undeclared padding
+    # is guessed even when natural alignment would require it.
+    if tag in record_alignments:
+        return record_alignments[tag], True
     if tag in vals:
         at = vals.index(tag)
         if at + 1 >= len(vals):
             raise A2LError("Missing explicit alignment size")
-        alignment = _number(vals[at + 1])
-        if alignment <= 0 or alignment > 16 or (alignment & (alignment - 1)):
-            raise A2LError(f"Unsupported declared alignment: {alignment}")
-        return alignment
-    return width  # conservative natural alignment: refuse unaligned fields
+        return _checked_alignment(_number(vals[at + 1])), True
+    return width, False
 
 
 def read_embedded(
@@ -144,7 +172,7 @@ def read_embedded(
     if not any(desc.words[0] == "STD_AXIS" for desc in axis_descs):
         raise A2LError("Use simple direct-table reader when no STD_AXIS exists")
     record = definition._by_name("RECORD_LAYOUT", words[4])
-    fields, fixed = _parse_layout(record.words)
+    fields, fixed, record_alignments = _parse_layout(record.words)
     if any(x in record.words for x in ("STATIC_RECORD_LAYOUT", "STATIC_ADDRESS_OFFSETS")):
         raise A2LError("Static offset allocation is not qualified")
     axes = [None] * len(axis_descs)
@@ -196,16 +224,28 @@ def read_embedded(
     parts = []
     seen_stored_axes = set()
     for field in fields:
-        axis = field.role[-1] if field.role != "FNC_VALUES" else None
-        fmt, width = READ_STORAGE[field.dtype]
+        axis = field.role[-1] if field.role.startswith(("AXIS_PTS_", "NO_AXIS_PTS_")) else None
+        if field.role == "RESERVED":
+            fmt, width = None, RESERVED_WIDTHS[field.dtype]
+        else:
+            fmt, width = READ_STORAGE[field.dtype]
         absolute = address + cursor
-        align = _module_alignment(definition, field.dtype, width)
-        if absolute % align != 0:
-            raise A2LError(
-                f"Unqualified implicit padding before {field.role}: "
-                f"absolute address {absolute:#x} needs alignment {align}"
-            )
-        if field.role.startswith("NO_AXIS_PTS_"):
+        align, declared = _module_alignment(
+            definition, field.dtype, width, record_alignments
+        )
+        padding = (-absolute) % align
+        if padding:
+            if not declared:
+                raise A2LError(
+                    f"Unqualified implicit padding before {field.role}: "
+                    f"absolute address {absolute:#x} needs alignment {align}"
+                )
+            # Align the ECU *absolute* address, not the BIN-relative offset.
+            cursor += padding
+            absolute += padding
+        if field.role == "RESERVED":
+            n = 1
+        elif field.role.startswith("NO_AXIS_PTS_"):
             if axis not in max_counts or axis_descs[AXIS_KEYS.index(axis)].words[0] != "STD_AXIS":
                 raise A2LError("Dynamic counter for unsupported axis")
             if axis in current_counts:
@@ -232,6 +272,15 @@ def read_embedded(
         at = offset0 + cursor
         if at < 0 or at + byte_count > len(firmware):
             raise A2LError("Inline record field extends outside BIN")
+        if field.role == "RESERVED":
+            parts.append({
+                "role": "RESERVED", "position": field.position,
+                "a2l_address": absolute, "bin_offset": at,
+                "bytes": byte_count, "elements": 1, "type": field.dtype,
+                "padding_before": padding, "ignored": True,
+            })
+            cursor += byte_count
+            continue  # uninterpreted storage: never decode reserved data
         if field.role.startswith("AXIS_PTS_"):
             idx = AXIS_KEYS.index(axis)
             order = definition._item_byte_order(axis_descs[idx])
@@ -247,13 +296,19 @@ def read_embedded(
             idx = AXIS_KEYS.index(axis)
             desc = axis_descs[idx]
             lower, upper = _float(desc.words[4]), _float(desc.words[5])
+            indexed_raw = raw[::-1] if field.index == "INDEX_DECR" else raw
             physical = _validated_physical(
-                definition, desc.words[2], raw, lower, upper
+                definition, desc.words[2], indexed_raw, lower, upper
             )
             axes[idx] = {
                 "kind": "STD_AXIS", "source": "inline_RECORD_LAYOUT",
                 "stored": True, "a2l_address": absolute, "bin_offset": at,
-                "count": n, "raw_values": raw, "physical_values": physical,
+                "count": n, "raw_values": indexed_raw, "physical_values": physical,
+                "memory_order_raw_values": raw,
+                "index_bin_offsets": [
+                    at + (n - 1 - i if field.index == "INDEX_DECR" else i) * width
+                    for i in range(n)
+                ],
                 "conversion": desc.words[2], "storage_format": order + fmt,
                 "index_mode": field.index,
                 "count_source": ("NO_AXIS_PTS_" + axis if "NO_AXIS_PTS_" + axis in field_roles
@@ -274,6 +329,7 @@ def read_embedded(
         parts.append({
             "role": field.role, "position": field.position, "a2l_address": absolute,
             "bin_offset": at, "bytes": byte_count, "elements": n, "type": field.dtype,
+            "padding_before": padding,
         })
         cursor += byte_count
     if function is None or len(seen_stored_axes) != sum(
@@ -294,6 +350,7 @@ def read_embedded(
         "storage_format": function["storage_format"],
         "item_count": function["n"],
         "record_fields": parts,
+        "record_size_bytes": cursor,
         "read_only": True,
         "cell_coordinate_mapping_qualified": False,
         "note": "Inline storage offsets decoded; coordinate mapping and writes not qualified.",

@@ -124,19 +124,21 @@ class InlineLayoutTests(unittest.TestCase):
         with self.assertRaisesRegex(A2LError, "padding"):
             d.read_table("K", bytes([2]) + bytes(23), 0x8000)
 
-    def test_explicit_strict_alignment_is_enforced(self):
+    def test_explicit_alignment_requires_full_image_span(self):
         layout = "AXIS_PTS_X 1 UWORD INDEX_INCR DIRECT FNC_VALUES 2 UWORD ROW_DIR DIRECT"
         desc = X.replace("4 0 255", "3 0 65535")
         d = self.d(layout, desc, common="ALIGNMENT_WORD 4")
-        with self.assertRaisesRegex(A2LError, "padding"):
+        # 3 UWORD axis points end at 0x8006; explicit ALIGNMENT_WORD 4
+        # requires two additional pad bytes before the six-byte function.
+        with self.assertRaisesRegex(A2LError, "outside BIN"):
             d.read_table("K", struct.pack("<6H", 1, 2, 3, 4, 5, 6), 0x8000)
 
     def test_unsupported_static_record_layout_and_pointers_refused(self):
         variants = [
             BYTES_CURVE + " STATIC_RECORD_LAYOUT",
             BYTES_CURVE.replace("INDEX_INCR DIRECT", "INDEX_INCR PWORD"),
-            BYTES_CURVE.replace("INDEX_INCR", "INDEX_DECR"),
-            BYTES_CURVE + " RESERVED 4 BYTE",
+            BYTES_CURVE + " STATIC_ADDRESS_OFFSETS",
+            BYTES_CURVE + " RESERVED 4 UBYTE",
         ]
         for layout in variants:
             with self.subTest(layout=layout):
@@ -161,6 +163,41 @@ class InlineLayoutTests(unittest.TestCase):
         d = self.d()
         with self.assertRaisesRegex(A2LError, "Only VALUE"):
             d.edit_raw("K", bytes([2, 10, 20, 30, 40]), 0x8000, 33)
+
+    def test_dynamic_map_export_preserves_record_fields_and_axis_order(self):
+        from kingai_a2l.cli import build_parser, execute
+        definition = self.d(BYTES_MAP, X + " " + Y, "MAP")
+        image = self.path.with_suffix(".bin")
+        blob = bytes([2, 10, 20, 3, 5, 6, 7, 1, 2, 3, 4, 5, 6])
+        image.write_bytes(blob)
+        args = build_parser().parse_args([
+            "export-json", "--a2l", str(self.path), "--bin", str(image),
+            "--base-address", "0x8000", "--include-tables",
+            "--max-table-values", "11"])
+        result = execute(args)
+        self.assertTrue(result["complete"])
+        self.assertEqual(result["table_export"]["value_count"], 11)
+        self.assertEqual(result["items"], [
+            {"status": "read", **definition.read_table("K", blob, 0x8000)}])
+        self.assertEqual(result["items"][0]["dimensions"], [2, 3])
+        self.assertEqual(result["items"][0]["bin_offset"], 7)
+        self.assertFalse(result["items"][0]["cell_coordinate_mapping_qualified"])
+        self.assertEqual(image.read_bytes(), blob)
+
+    def test_dynamic_layout_export_rejects_truncated_record(self):
+        from kingai_a2l.cli import build_parser, execute
+        self.d()
+        image = self.path.with_suffix(".bin")
+        image.write_bytes(bytes([2, 10, 20, 30]))
+        args = build_parser().parse_args([
+            "export-json", "--a2l", str(self.path), "--bin", str(image),
+            "--base-address", "0x8000", "--include-tables"])
+        result = execute(args)
+        self.assertFalse(result["complete"])
+        self.assertEqual(result["table_export"]["table_count"], 0)
+        self.assertEqual(result["table_export"]["value_count"], 0)
+        self.assertEqual(result["items"][0]["status"], "unsupported")
+        self.assertIn("outside BIN", result["items"][0]["reason"])
 
     def test_dynamic_layout_via_headless_cli(self):
         self.d()
